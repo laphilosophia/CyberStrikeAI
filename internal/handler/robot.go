@@ -596,15 +596,25 @@ func (h *RobotHandler) HandleWecomPOST(c *gin.Context) {
 	h.logger.Debug("企业微信 POST 收到请求", zap.String("body", string(bodyRaw)))
 
 	// 验证请求签名防止伪造。企业微信签名算法同 URL 验证，使用 token、timestamp、nonce、 Encrypt 四个字段
-	if msgSignature != "" {
+	// 若配置了 Token 则必须校验签名，避免未授权请求触发 Agent（防止平台被接管）
+	token := h.config.Robots.Wecom.Token
+	if token != "" {
+		if msgSignature == "" {
+			h.logger.Warn("企业微信 POST 缺少签名，已拒绝（需配置 token 并确保回调携带 msg_signature）")
+			c.String(http.StatusOK, "")
+			return
+		}
 		var tmp wecomXML
-		if err := xml.Unmarshal(bodyRaw, &tmp); err == nil {
-			expected := h.signWecomRequest(h.config.Robots.Wecom.Token, timestamp, nonce, tmp.Encrypt)
-			if expected != msgSignature {
-				h.logger.Warn("企业微信 POST 签名验证失败", zap.String("expected", expected), zap.String("got", msgSignature))
-				c.String(http.StatusOK, "")
-				return
-			}
+		if err := xml.Unmarshal(bodyRaw, &tmp); err != nil {
+			h.logger.Warn("企业微信 POST 签名验证前解析 XML 失败", zap.Error(err))
+			c.String(http.StatusOK, "")
+			return
+		}
+		expected := h.signWecomRequest(token, timestamp, nonce, tmp.Encrypt)
+		if expected != msgSignature {
+			h.logger.Warn("企业微信 POST 签名验证失败", zap.String("expected", expected), zap.String("got", msgSignature))
+			c.String(http.StatusOK, "")
+			return
 		}
 	}
 
