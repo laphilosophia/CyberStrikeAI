@@ -112,6 +112,7 @@ type AgentConfig struct {
 	MaxIterations        int    `yaml:"max_iterations" json:"max_iterations"`
 	LargeResultThreshold int    `yaml:"large_result_threshold" json:"large_result_threshold"` // 大结果阈值（字节），默认50KB
 	ResultStorageDir     string `yaml:"result_storage_dir" json:"result_storage_dir"`         // 结果存储目录，默认tmp
+	ToolTimeoutMinutes   int    `yaml:"tool_timeout_minutes" json:"tool_timeout_minutes"`     // 单次工具执行最大时长（分钟），超时自动终止，防止长时间挂起；0 表示不限制（不推荐）
 }
 
 type AuthConfig struct {
@@ -682,7 +683,8 @@ func Default() *Config {
 			MaxTotalTokens: 120000,
 		},
 		Agent: AgentConfig{
-			MaxIterations: 30, // 默认最大迭代次数
+			MaxIterations:      30,  // 默认最大迭代次数
+			ToolTimeoutMinutes: 10,  // 单次工具执行默认最多 10 分钟，避免异常长时间占用
 		},
 		Security: SecurityConfig{
 			Tools:    []ToolConfig{}, // 工具配置应该从 config.yaml 或 tools/ 目录加载

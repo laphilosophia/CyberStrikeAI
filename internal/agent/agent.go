@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -1234,6 +1235,18 @@ func (a *Agent) executeToolViaMCP(ctx context.Context, toolName string, args map
 	var executionID string
 	var err error
 
+	// 单次工具执行超时：防止单个工具长时间挂起（如 30 分钟仍显示执行中）
+	toolCtx := ctx
+	var toolCancel context.CancelFunc
+	if a.agentConfig != nil && a.agentConfig.ToolTimeoutMinutes > 0 {
+		toolCtx, toolCancel = context.WithTimeout(ctx, time.Duration(a.agentConfig.ToolTimeoutMinutes)*time.Minute)
+		defer func() {
+			if toolCancel != nil {
+				toolCancel()
+			}
+		}()
+	}
+
 	// 检查是否是外部MCP工具（通过工具名称映射）
 	a.mu.RLock()
 	originalToolName, isExternalTool := a.toolNameMapping[toolName]
@@ -1245,29 +1258,39 @@ func (a *Agent) executeToolViaMCP(ctx context.Context, toolName string, args map
 			zap.String("openAIName", toolName),
 			zap.String("originalName", originalToolName),
 		)
-		result, executionID, err = a.externalMCPMgr.CallTool(ctx, originalToolName, args)
+		result, executionID, err = a.externalMCPMgr.CallTool(toolCtx, originalToolName, args)
 	} else {
 		// 调用内部MCP工具
-		result, executionID, err = a.mcpServer.CallTool(ctx, toolName, args)
+		result, executionID, err = a.mcpServer.CallTool(toolCtx, toolName, args)
 	}
 
-	// 如果调用失败（如工具不存在），返回友好的错误信息而不是抛出异常
+	// 如果调用失败（如工具不存在、超时），返回友好的错误信息而不是抛出异常
 	if err != nil {
+		detail := err.Error()
+		if errors.Is(err, context.DeadlineExceeded) {
+			min := 10
+			if a.agentConfig != nil && a.agentConfig.ToolTimeoutMinutes > 0 {
+				min = a.agentConfig.ToolTimeoutMinutes
+			}
+			detail = fmt.Sprintf("工具执行超过 %d 分钟被自动终止（可在 config.yaml 的 agent.tool_timeout_minutes 中调整）", min)
+		}
 		errorMsg := fmt.Sprintf(`工具调用失败
 
 工具名称: %s
 错误类型: 系统错误
-错误详情: %v
+错误详情: %s
 
 可能的原因：
 - 工具 "%s" 不存在或未启用
+- 单次执行超时（agent.tool_timeout_minutes）
 - 系统配置问题
 - 网络或权限问题
 
 建议：
 - 检查工具名称是否正确
+- 若需更长执行时间，可适当增大 agent.tool_timeout_minutes
 - 尝试使用其他替代工具
-- 如果这是必需的工具，请向用户说明情况`, toolName, err, toolName)
+- 如果这是必需的工具，请向用户说明情况`, toolName, detail, toolName)
 
 		return &ToolExecutionResult{
 			Result:      errorMsg,
