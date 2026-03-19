@@ -52,7 +52,7 @@ body {
     overflow: hidden;
     min-height: 0;
     /* 主侧边栏与右侧内容之间预留水平间距，避免导航项文字贴到内容边框 */
-    column-gap: 12px;
+    column-gap: 0px;
 }
 
 /* 主侧边栏样式 - 紧凑宽度，参考常见后台 200~220px */
