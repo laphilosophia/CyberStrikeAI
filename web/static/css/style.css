@@ -3447,6 +3447,27 @@ header {
 
 .terminal-container .xterm-viewport {
     border-radius: 0;
+    /* 与 WebShell 终端一致：细窄、深色，避免系统默认浅色粗滚动条 */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(110, 118, 129, 0.5) transparent;
+}
+.terminal-container .xterm-viewport::-webkit-scrollbar {
+    width: 6px;
+}
+.terminal-container .xterm-viewport::-webkit-scrollbar-track {
+    background: transparent;
+    margin: 4px 0;
+    border-radius: 3px;
+}
+.terminal-container .xterm-viewport::-webkit-scrollbar-thumb {
+    background: rgba(110, 118, 129, 0.4);
+    border-radius: 3px;
+}
+.terminal-container .xterm-viewport::-webkit-scrollbar-thumb:hover {
+    background: rgba(110, 118, 129, 0.65);
+}
+.terminal-container .xterm-viewport::-webkit-scrollbar-thumb:active {
+    background: rgba(139, 148, 158, 0.7);
 }
 
 .terminal-error {
