@@ -19,7 +19,8 @@
     "copy": "Copy",
     "copied": "Copied",
     "copyFailed": "Copy failed",
-    "view": "View"
+    "view": "View",
+    "actions": "Actions"
   },
   "header": {
     "title": "CyberStrikeAI",
@@ -409,7 +410,19 @@
     "selectAll": "Select all",
     "searchPlaceholder": "Search connections...",
     "noMatchConnections": "No matching connections",
-    "breadcrumbHome": "Root"
+    "breadcrumbHome": "Root",
+    "back": "Back",
+    "moreActions": "More actions",
+    "batchProbe": "Batch probe",
+    "probeRunning": "Probing",
+    "probeOnline": "Online",
+    "probeOffline": "Offline",
+    "probeNoConnections": "No connections to probe",
+    "colModifiedAt": "Modified",
+    "colPerms": "Permissions",
+    "colOwner": "Owner",
+    "colGroup": "Group",
+    "colType": "Type"
   },
   "mcp": {
     "monitorTitle": "MCP Status Monitor",

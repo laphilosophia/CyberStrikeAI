@@ -25,6 +25,8 @@ let webshellAiConvMap = {};
 let webshellAiSending = false;
 // 流式打字机效果：当前会话的 response 序号，用于中止过期的打字
 let webshellStreamingTypingId = 0;
+let webshellProbeStatusById = {};
+let webshellBatchProbeRunning = false;
 
 /** 与主对话页一致：multi_agent.enabled 且本地模式为 multi 时使用 /api/multi-agent/stream */
 function resolveWebshellAiStreamPath() {
@@ -116,13 +118,26 @@ function wsT(key) {
         'webshell.filterPlaceholder': '过滤文件名',
         'webshell.batchDelete': '批量删除',
         'webshell.batchDownload': '批量下载',
+        'webshell.moreActions': '更多操作',
         'webshell.refresh': '刷新',
         'webshell.selectAll': '全选',
         'webshell.breadcrumbHome': '根',
         'webshell.searchPlaceholder': '搜索连接...',
         'webshell.noMatchConnections': '暂无匹配连接',
+        'webshell.batchProbe': '一键批量探活',
+        'webshell.probeRunning': '探活中',
+        'webshell.probeOnline': '在线',
+        'webshell.probeOffline': '离线',
+        'webshell.probeNoConnections': '暂无可探活连接',
+        'webshell.back': '返回',
+        'webshell.colModifiedAt': '修改时间',
+        'webshell.colPerms': '权限',
+        'webshell.colOwner': '所有者',
+        'webshell.colGroup': '用户组',
+        'webshell.colType': '类型',
         'common.delete': '删除',
-        'common.refresh': '刷新'
+        'common.refresh': '刷新',
+        'common.actions': '操作'
     };
     return fallback[key] || key;
 }
@@ -149,9 +164,30 @@ function bindWebshellClearOnce() {
     }, true);
 }
 
+// WebShell 行内/工具栏“操作”下拉：点击菜单外自动收起
+function bindWebshellActionMenusAutoCloseOnce() {
+    if (window._webshellActionMenusAutoCloseBound) return;
+    window._webshellActionMenusAutoCloseBound = true;
+    document.addEventListener('click', function (e) {
+        // 只要点在 details 内部，就让浏览器自行切换（open/close）
+        var clickedInMenu = e.target && e.target.closest && (
+            e.target.closest('details.webshell-conn-actions') ||
+            e.target.closest('details.webshell-row-actions') ||
+            e.target.closest('details.webshell-toolbar-actions')
+        );
+        if (clickedInMenu) return;
+
+        var openDetails = document.querySelectorAll(
+            'details.webshell-conn-actions[open],details.webshell-row-actions[open],details.webshell-toolbar-actions[open]'
+        );
+        openDetails.forEach(function (d) { d.open = false; });
+    }, true);
+}
+
 // 初始化 WebShell 管理页面（从 SQLite 拉取连接列表）
 function initWebshellPage() {
     bindWebshellClearOnce();
+    bindWebshellActionMenusAutoCloseOnce();
     destroyWebshellTerminal();
     webshellCurrentConn = null;
     currentWebshellId = null;
@@ -177,6 +213,15 @@ function initWebshellPage() {
         webshellConnections = list;
         renderWebshellList();
     });
+
+    var batchProbeBtn = document.getElementById('webshell-batch-probe-btn');
+    if (batchProbeBtn && batchProbeBtn.dataset.bound !== '1') {
+        batchProbeBtn.dataset.bound = '1';
+        batchProbeBtn.addEventListener('click', function () {
+            runBatchProbeWebshellConnections();
+        });
+    }
+    updateWebshellBatchProbeButton();
 }
 
 function getWebshellSidebarWidth() {
@@ -287,13 +332,26 @@ function renderWebshellList() {
         const urlTitle = (conn.url || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
         const active = currentWebshellId === conn.id ? ' active' : '';
         const safeId = escapeHtml(conn.id);
+        const actionsLabel = wsT('common.actions') || '操作';
+        const probe = webshellProbeStatusById[conn.id] || null;
+        var probeHtml = '';
+        if (probe && probe.state === 'probing') {
+            probeHtml = '<span class="webshell-probe-badge probing">' + (wsT('webshell.probeRunning') || '探活中') + '</span>';
+        } else if (probe && probe.state === 'ok') {
+            probeHtml = '<span class="webshell-probe-badge ok">' + (wsT('webshell.probeOnline') || '在线') + '</span>';
+        } else if (probe && probe.state === 'fail') {
+            probeHtml = '<span class="webshell-probe-badge fail" title="' + escapeHtml(probe.message || '') + '">' + (wsT('webshell.probeOffline') || '离线') + '</span>';
+        }
         return (
             '<div class="webshell-item' + active + '" data-id="' + safeId + '">' +
-            '<div class="webshell-item-remark" title="' + urlTitle + '">' + remark + '</div>' +
+            '<div class="webshell-item-remark-row"><div class="webshell-item-remark" title="' + urlTitle + '">' + remark + '</div>' + probeHtml + '</div>' +
             '<div class="webshell-item-url" title="' + urlTitle + '">' + url + '</div>' +
             '<div class="webshell-item-actions">' +
-            '<button type="button" class="btn-ghost btn-sm webshell-edit-conn-btn" data-id="' + safeId + '" title="' + wsT('webshell.editConnection') + '">' + wsT('webshell.editConnection') + '</button> ' +
+            '<details class="webshell-conn-actions"><summary class="btn-ghost btn-sm webshell-conn-actions-btn" title="' + actionsLabel + '">' + actionsLabel + '</summary>' +
+            '<div class="webshell-row-actions-menu">' +
+            '<button type="button" class="btn-ghost btn-sm webshell-edit-conn-btn" data-id="' + safeId + '" title="' + wsT('webshell.editConnection') + '">' + wsT('webshell.editConnection') + '</button>' +
             '<button type="button" class="btn-ghost btn-sm webshell-delete-btn" data-id="' + safeId + '" title="' + wsT('common.delete') + '">' + wsT('common.delete') + '</button>' +
+            '</div></details>' +
             '</div>' +
             '</div>'
         );
@@ -301,7 +359,7 @@ function renderWebshellList() {
 
     listEl.querySelectorAll('.webshell-item').forEach(el => {
         el.addEventListener('click', function (e) {
-            if (e.target.closest('.webshell-delete-btn') || e.target.closest('.webshell-edit-conn-btn')) return;
+            if (e.target.closest('.webshell-delete-btn') || e.target.closest('.webshell-edit-conn-btn') || e.target.closest('.webshell-conn-actions-btn')) return;
             selectWebshell(el.getAttribute('data-id'));
         });
     });
@@ -316,6 +374,102 @@ function renderWebshellList() {
             e.stopPropagation();
             deleteWebshell(btn.getAttribute('data-id'));
         });
+    });
+}
+
+function probeWebshellConnection(conn) {
+    if (!conn || typeof apiFetch === 'undefined') {
+        return Promise.resolve({ ok: false, message: wsT('webshell.testFailed') || '连通性测试失败' });
+    }
+    return apiFetch('/api/webshell/exec', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            url: conn.url,
+            password: conn.password || '',
+            type: conn.type || 'php',
+            method: ((conn.method || 'post').toLowerCase() === 'get') ? 'get' : 'post',
+            cmd_param: conn.cmdParam || '',
+            command: 'echo 1'
+        })
+    })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            var output = (data && data.output != null) ? String(data.output).trim() : '';
+            var ok = !!(data && data.ok && output === '1');
+            if (ok) return { ok: true, message: wsT('webshell.testSuccess') || '连通性正常，Shell 可访问' };
+            var msg = (data && data.error) ? data.error : (wsT('webshell.testFailed') || '连通性测试失败');
+            return { ok: false, message: msg };
+        })
+        .catch(function (e) {
+            return { ok: false, message: (e && e.message) ? e.message : String(e) };
+        });
+}
+
+function updateWebshellBatchProbeButton(done, total, okCount) {
+    var btn = document.getElementById('webshell-batch-probe-btn');
+    if (!btn) return;
+    if (webshellBatchProbeRunning) {
+        var d = typeof done === 'number' ? done : 0;
+        var t = typeof total === 'number' ? total : webshellConnections.length;
+        btn.disabled = true;
+        btn.textContent = (wsT('webshell.probeRunning') || '探活中') + ' ' + d + '/' + t;
+        return;
+    }
+    btn.disabled = false;
+    if (typeof done === 'number' && typeof total === 'number' && total > 0 && typeof okCount === 'number') {
+        btn.textContent = (wsT('webshell.batchProbe') || '一键批量探活') + ' (' + okCount + '/' + total + ')';
+    } else {
+        btn.textContent = wsT('webshell.batchProbe') || '一键批量探活';
+    }
+}
+
+function runBatchProbeWebshellConnections() {
+    if (webshellBatchProbeRunning) return;
+    if (!Array.isArray(webshellConnections) || webshellConnections.length === 0) {
+        alert(wsT('webshell.probeNoConnections') || '暂无可探活连接');
+        return;
+    }
+    webshellBatchProbeRunning = true;
+    var total = webshellConnections.length;
+    var done = 0;
+    var okCount = 0;
+
+    webshellConnections.forEach(function (conn) {
+        if (!conn || !conn.id) return;
+        webshellProbeStatusById[conn.id] = { state: 'probing', message: '' };
+    });
+    renderWebshellList();
+    updateWebshellBatchProbeButton(done, total, okCount);
+
+    var idx = 0;
+    var concurrency = Math.min(4, total);
+
+    function runOne() {
+        if (idx >= total) return Promise.resolve();
+        var conn = webshellConnections[idx++];
+        if (!conn || !conn.id) {
+            done++;
+            updateWebshellBatchProbeButton(done, total, okCount);
+            return runOne();
+        }
+        return probeWebshellConnection(conn).then(function (res) {
+            if (res.ok) okCount++;
+            webshellProbeStatusById[conn.id] = {
+                state: res.ok ? 'ok' : 'fail',
+                message: res.message || ''
+            };
+            done++;
+            renderWebshellList();
+            updateWebshellBatchProbeButton(done, total, okCount);
+        }).then(runOne);
+    }
+
+    var workers = [];
+    for (var i = 0; i < concurrency; i++) workers.push(runOne());
+    Promise.all(workers).finally(function () {
+        webshellBatchProbeRunning = false;
+        updateWebshellBatchProbeButton(done, total, okCount);
     });
 }
 
@@ -566,16 +720,24 @@ function selectWebshell(id) {
         '<div id="webshell-pane-file" class="webshell-pane">' +
         '<div class="webshell-file-toolbar">' +
         '<div class="webshell-file-breadcrumb" id="webshell-file-breadcrumb"></div>' +
-        '<label><span>' + wsT('webshell.filePath') + '</span> <input type="text" id="webshell-file-path" class="form-control" value="." /></label>' +
+        '<div class="webshell-file-toolbar-main">' +
+        '<label class="webshell-file-path-field"><span>' + wsT('webshell.filePath') + '</span> <input type="text" id="webshell-file-path" class="form-control" value="." /></label>' +
         '<input type="text" id="webshell-file-filter" class="form-control webshell-file-filter" placeholder="' + (wsT('webshell.filterPlaceholder') || '过滤文件名') + '" />' +
-        '<button type="button" class="btn-secondary" id="webshell-list-dir">' + wsT('webshell.listDir') + '</button> ' +
-        '<button type="button" class="btn-ghost" id="webshell-parent-dir">' + wsT('webshell.parentDir') + '</button> ' +
-        '<button type="button" class="btn-ghost" id="webshell-file-refresh" title="' + (wsT('webshell.refresh') || '刷新') + '">' + (wsT('webshell.refresh') || '刷新') + '</button> ' +
-        '<button type="button" class="btn-ghost" id="webshell-mkdir-btn">' + (wsT('webshell.newDir') || '新建目录') + '</button> ' +
-        '<button type="button" class="btn-ghost" id="webshell-newfile-btn">' + (wsT('webshell.newFile') || '新建文件') + '</button> ' +
-        '<button type="button" class="btn-ghost" id="webshell-upload-btn">' + (wsT('webshell.upload') || '上传') + '</button> ' +
-        '<button type="button" class="btn-ghost" id="webshell-batch-delete-btn">' + (wsT('webshell.batchDelete') || '批量删除') + '</button> ' +
+        '<button type="button" class="btn-secondary" id="webshell-list-dir">' + wsT('webshell.listDir') + '</button>' +
+        '<button type="button" class="btn-ghost" id="webshell-parent-dir">' + wsT('webshell.parentDir') + '</button>' +
+        '</div>' +
+        '<div class="webshell-file-toolbar-actions">' +
+        '<button type="button" class="btn-ghost" id="webshell-file-refresh" title="' + (wsT('webshell.refresh') || '刷新') + '">' + (wsT('webshell.refresh') || '刷新') + '</button>' +
+        '<details class="webshell-toolbar-actions">' +
+        '<summary class="btn-ghost webshell-toolbar-actions-btn">' + (wsT('webshell.moreActions') || '更多操作') + '</summary>' +
+        '<div class="webshell-row-actions-menu">' +
+        '<button type="button" class="btn-ghost" id="webshell-mkdir-btn">' + (wsT('webshell.newDir') || '新建目录') + '</button>' +
+        '<button type="button" class="btn-ghost" id="webshell-newfile-btn">' + (wsT('webshell.newFile') || '新建文件') + '</button>' +
+        '<button type="button" class="btn-ghost" id="webshell-upload-btn">' + (wsT('webshell.upload') || '上传') + '</button>' +
+        '<button type="button" class="btn-ghost" id="webshell-batch-delete-btn">' + (wsT('webshell.batchDelete') || '批量删除') + '</button>' +
         '<button type="button" class="btn-ghost" id="webshell-batch-download-btn">' + (wsT('webshell.batchDownload') || '批量下载') + '</button>' +
+        '</div></details>' +
+        '</div>' +
         '</div>' +
         '<div id="webshell-file-list" class="webshell-file-list"></div>' +
         '</div>' +
@@ -1343,21 +1505,86 @@ function webshellFileListDir(conn, path) {
 }
 
 function renderFileList(listEl, currentPath, rawOutput, conn, nameFilter) {
+    function normalizeLsMtime(month, day, timeOrYear) {
+        if (!month || !day || !timeOrYear) return '';
+        var token = String(timeOrYear).trim();
+        if (/^\d{4}$/.test(token)) {
+            return token + ' ' + month + ' ' + day;
+        }
+        var now = new Date();
+        var year = now.getFullYear();
+        if (/^\d{1,2}:\d{2}$/.test(token)) {
+            // ls -l 在半年内通常只显示 HH:MM；推断年份（避免未来日期）
+            var monthMap = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
+            var m = monthMap[month];
+            var d = parseInt(day, 10);
+            if (m != null && !isNaN(d)) {
+                var inferred = new Date(year, m, d);
+                if (inferred.getTime() > now.getTime()) year = year - 1;
+            }
+            return year + ' ' + month + ' ' + day + ' ' + token;
+        }
+        return month + ' ' + day + ' ' + token;
+    }
+
+    function modeToType(mode) {
+        if (!mode || !mode.length) return '';
+        var c = mode.charAt(0);
+        if (c === 'd') return 'dir';
+        if (c === '-') return 'file';
+        if (c === 'l') return 'link';
+        if (c === 'c') return 'char';
+        if (c === 'b') return 'block';
+        if (c === 's') return 'socket';
+        if (c === 'p') return 'pipe';
+        return c;
+    }
+
     var lines = rawOutput.split(/\n/).filter(function (l) { return l.trim(); });
     var items = [];
     for (var i = 0; i < lines.length; i++) {
         var line = lines[i];
-        var m = line.match(/\s*(\S+)\s*$/);
-        var name = m ? m[1].trim() : line.trim();
-        if (name === '.' || name === '..') continue;
-        var isDir = line.startsWith('d') || line.toLowerCase().indexOf('<dir>') !== -1;
+        var name = '';
+        var isDir = false;
         var size = '';
         var mode = '';
-        if (line.startsWith('-') || line.startsWith('d')) {
-            var parts = line.split(/\s+/);
-            if (parts.length >= 5) { mode = parts[0]; size = parts[4]; }
+        var mtime = '';
+        var owner = '';
+        var group = '';
+        var type = '';
+
+        // 兼容典型：ls -la 输出（mode links owner group size month day time|year name）
+        // 示例：-rw-r--r-- 1 user group 1234 Mar 23 12:34 file.txt
+        var mLs = line.match(/^(\S+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(\d+)\s+([A-Za-z]{3})\s+(\d{1,2})\s+(\S+)\s+(.+)$/);
+        if (mLs) {
+            mode = mLs[1];
+            owner = mLs[3];
+            group = mLs[4];
+            size = mLs[5];
+            mtime = normalizeLsMtime(mLs[6], mLs[7], mLs[8]);
+            name = (mLs[9] || '').trim();
+            isDir = mode && mode.startsWith('d');
+            type = modeToType(mode);
+        } else {
+            // 兜底：用最后一段当文件名
+            var mName = line.match(/\s*(\S+)\s*$/);
+            name = mName ? mName[1].trim() : line.trim();
+            if (name === '.' || name === '..') continue;
+            isDir = line.startsWith('d') || line.toLowerCase().indexOf('<dir>') !== -1;
+            if (line.startsWith('-') || line.startsWith('d')) {
+                var parts = line.split(/\s+/);
+                if (parts.length >= 5) { mode = parts[0]; size = parts[4]; }
+                if (parts.length >= 4) { owner = parts[2] || ''; group = parts[3] || ''; }
+                // 尝试解析 mtime：month day (time|year)
+                if (parts.length >= 8 && /^[A-Za-z]{3}$/.test(parts[5])) {
+                    mtime = normalizeLsMtime(parts[5], parts[6], parts[7]);
+                }
+                type = modeToType(mode);
+            }
         }
-        items.push({ name: name, isDir: isDir, line: line, size: size, mode: mode });
+
+        if (name === '.' || name === '..') continue;
+        items.push({ name: name, isDir: isDir, line: line, size: size, mode: mode, mtime: mtime, owner: owner, group: group, type: type });
     }
     if (nameFilter && nameFilter.trim()) {
         var f = nameFilter.trim().toLowerCase();
@@ -1374,26 +1601,44 @@ function renderFileList(listEl, currentPath, rawOutput, conn, nameFilter) {
             }).join('');
     }
     var html = '';
-    if (items.length === 0 && rawOutput.trim() && !nameFilter) {
-        html = '<pre class="webshell-file-raw">' + escapeHtml(rawOutput) + '</pre>';
+    if (items.length === 0) {
+        // 目录为空/过滤后为空时，给出明确空状态，避免 tbody 留白导致“整块抽象大白屏”
+        if (rawOutput.trim() && !nameFilter) {
+            html = '<pre class="webshell-file-raw">' + escapeHtml(rawOutput) + '</pre>';
+        } else {
+            html = '<table class="webshell-file-table"><thead><tr><th class="webshell-col-check"><input type="checkbox" id="webshell-file-select-all" title="' + (wsT('webshell.selectAll') || '全选') + '" /></th><th>' + wsT('webshell.filePath') + '</th><th class="webshell-col-size">大小</th><th class="webshell-col-mtime">' + (wsT('webshell.colModifiedAt') || '修改时间') + '</th><th class="webshell-col-owner">' + (wsT('webshell.colOwner') || '所有者') + '</th><th class="webshell-col-group">' + (wsT('webshell.colGroup') || '用户组') + '</th><th class="webshell-col-perms">' + (wsT('webshell.colPerms') || '权限') + '</th><th class="webshell-col-type">' + (wsT('webshell.colType') || '类型') + '</th><th class="webshell-col-actions"></th></tr></thead><tbody>' +
+                '<tr><td colspan="9" class="webshell-file-empty-state">' + (wsT('common.noData') || '暂无文件') + '</td></tr>' +
+                '</tbody></table>';
+        }
     } else {
-        html = '<table class="webshell-file-table"><thead><tr><th class="webshell-col-check"><input type="checkbox" id="webshell-file-select-all" title="' + (wsT('webshell.selectAll') || '全选') + '" /></th><th>' + wsT('webshell.filePath') + '</th><th class="webshell-col-size">大小</th><th></th></tr></thead><tbody>';
+        html = '<table class="webshell-file-table"><thead><tr><th class="webshell-col-check"><input type="checkbox" id="webshell-file-select-all" title="' + (wsT('webshell.selectAll') || '全选') + '" /></th><th>' + wsT('webshell.filePath') + '</th><th class="webshell-col-size">大小</th><th class="webshell-col-mtime">' + (wsT('webshell.colModifiedAt') || '修改时间') + '</th><th class="webshell-col-owner">' + (wsT('webshell.colOwner') || '所有者') + '</th><th class="webshell-col-group">' + (wsT('webshell.colGroup') || '用户组') + '</th><th class="webshell-col-perms">' + (wsT('webshell.colPerms') || '权限') + '</th><th class="webshell-col-type">' + (wsT('webshell.colType') || '类型') + '</th><th class="webshell-col-actions"></th></tr></thead><tbody>';
         if (currentPath !== '.' && currentPath !== '') {
-            html += '<tr><td></td><td><a href="#" class="webshell-file-link" data-path="' + escapeHtml(currentPath.replace(/\/[^/]+$/, '') || '.') + '" data-isdir="1">..</a></td><td></td><td></td></tr>';
+            html += '<tr><td></td><td><a href="#" class="webshell-file-link" data-path="' + escapeHtml(currentPath.replace(/\/[^/]+$/, '') || '.') + '" data-isdir="1">..</a></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>';
         }
         items.forEach(function (item) {
             var pathNext = currentPath === '.' ? item.name : currentPath + '/' + item.name;
             html += '<tr><td class="webshell-col-check">';
             if (!item.isDir) html += '<input type="checkbox" class="webshell-file-cb" data-path="' + escapeHtml(pathNext) + '" />';
-            html += '</td><td><a href="#" class="webshell-file-link" data-path="' + escapeHtml(pathNext) + '" data-isdir="' + (item.isDir ? '1' : '0') + '">' + escapeHtml(item.name) + (item.isDir ? '/' : '') + '</a></td><td class="webshell-col-size">' + escapeHtml(item.size) + '</td><td>';
+            html += '</td><td><a href="#" class="webshell-file-link" data-path="' + escapeHtml(pathNext) + '" data-isdir="' + (item.isDir ? '1' : '0') + '">' + escapeHtml(item.name) + (item.isDir ? '/' : '') + '</a></td>';
+            html += '<td class="webshell-col-size">' + escapeHtml(item.size) + '</td>';
+            html += '<td class="webshell-col-mtime">' + escapeHtml(item.mtime || '') + '</td>';
+            html += '<td class="webshell-col-owner">' + escapeHtml(item.owner || '') + '</td>';
+            html += '<td class="webshell-col-group">' + escapeHtml(item.group || '') + '</td>';
+            html += '<td class="webshell-col-perms">' + escapeHtml(item.mode || '') + '</td>';
+            html += '<td class="webshell-col-type">' + escapeHtml(item.type || '') + '</td>';
+            html += '<td class="webshell-col-actions">';
             if (item.isDir) {
                 html += '<button type="button" class="btn-ghost btn-sm webshell-file-rename" data-path="' + escapeHtml(pathNext) + '" data-name="' + escapeHtml(item.name) + '">' + (wsT('webshell.rename') || '重命名') + '</button>';
             } else {
-                html += '<button type="button" class="btn-ghost btn-sm webshell-file-read" data-path="' + escapeHtml(pathNext) + '">' + wsT('webshell.readFile') + '</button> ';
-                html += '<button type="button" class="btn-ghost btn-sm webshell-file-download" data-path="' + escapeHtml(pathNext) + '">' + wsT('webshell.downloadFile') + '</button> ';
-                html += '<button type="button" class="btn-ghost btn-sm webshell-file-edit" data-path="' + escapeHtml(pathNext) + '">' + wsT('webshell.editFile') + '</button> ';
-                html += '<button type="button" class="btn-ghost btn-sm webshell-file-rename" data-path="' + escapeHtml(pathNext) + '" data-name="' + escapeHtml(item.name) + '">' + (wsT('webshell.rename') || '重命名') + '</button> ';
-                html += '<button type="button" class="btn-ghost btn-sm webshell-file-del" data-path="' + escapeHtml(pathNext) + '">' + wsT('webshell.deleteFile') + '</button>';
+                var actionsLabel = wsT('common.actions') || '操作';
+                html += '<details class="webshell-row-actions"><summary class="btn-ghost btn-sm webshell-row-actions-btn" title="' + actionsLabel + '">' + actionsLabel + '</summary>' +
+                    '<div class="webshell-row-actions-menu">' +
+                    '<button type="button" class="btn-ghost btn-sm webshell-file-read" data-path="' + escapeHtml(pathNext) + '">' + wsT('webshell.readFile') + '</button>' +
+                    '<button type="button" class="btn-ghost btn-sm webshell-file-download" data-path="' + escapeHtml(pathNext) + '">' + wsT('webshell.downloadFile') + '</button>' +
+                    '<button type="button" class="btn-ghost btn-sm webshell-file-edit" data-path="' + escapeHtml(pathNext) + '">' + wsT('webshell.editFile') + '</button>' +
+                    '<button type="button" class="btn-ghost btn-sm webshell-file-rename" data-path="' + escapeHtml(pathNext) + '" data-name="' + escapeHtml(item.name) + '">' + (wsT('webshell.rename') || '重命名') + '</button>' +
+                    '<button type="button" class="btn-ghost btn-sm webshell-file-del" data-path="' + escapeHtml(pathNext) + '">' + wsT('webshell.deleteFile') + '</button>' +
+                    '</div></details>';
             }
             html += '</td></tr>';
         });
@@ -1407,15 +1652,19 @@ function renderFileList(listEl, currentPath, rawOutput, conn, nameFilter) {
             const path = a.getAttribute('data-path');
             const isDir = a.getAttribute('data-isdir') === '1';
             const pathInput = document.getElementById('webshell-file-path');
-            if (pathInput) pathInput.value = path;
-            if (isDir) webshellFileListDir(webshellCurrentConn, path);
-            else webshellFileRead(webshellCurrentConn, path, listEl);
+            if (isDir) {
+                if (pathInput) pathInput.value = path;
+                webshellFileListDir(webshellCurrentConn, path);
+            } else {
+                // 打开文件时保留当前“浏览目录”上下文，避免返回时落到单文件视图
+                webshellFileRead(webshellCurrentConn, path, listEl, currentPath);
+            }
         });
     });
     listEl.querySelectorAll('.webshell-file-read').forEach(function (btn) {
         btn.addEventListener('click', function (e) {
             e.preventDefault();
-            webshellFileRead(webshellCurrentConn, btn.getAttribute('data-path'), listEl);
+            webshellFileRead(webshellCurrentConn, btn.getAttribute('data-path'), listEl, currentPath);
         });
     });
     listEl.querySelectorAll('.webshell-file-download').forEach(function (btn) {
@@ -1600,7 +1849,7 @@ function webshellFileDownload(conn, path) {
         .catch(function (err) { alert(wsT('webshell.execError') + ': ' + (err && err.message ? err.message : '')); });
 }
 
-function webshellFileRead(conn, path, listEl) {
+function webshellFileRead(conn, path, listEl, browsePath) {
     if (typeof apiFetch === 'undefined') return;
     listEl.innerHTML = '<div class="webshell-loading">' + wsT('webshell.readFile') + '...</div>';
     apiFetch('/api/webshell/file', {
@@ -1610,7 +1859,19 @@ function webshellFileRead(conn, path, listEl) {
     }).then(function (r) { return r.json(); })
         .then(function (data) {
             const out = (data && data.output) ? data.output : (data.error || '');
-            listEl.innerHTML = '<div class="webshell-file-content"><pre>' + escapeHtml(out) + '</pre><button type="button" class="btn-ghost" onclick="webshellFileListDir(webshellCurrentConn, document.getElementById(\'webshell-file-path\').value.trim() || \'.\')">' + wsT('webshell.listDir') + '</button></div>';
+            var backPath = (browsePath && String(browsePath).trim()) ? String(browsePath).trim() : ((document.getElementById('webshell-file-path') && document.getElementById('webshell-file-path').value.trim()) || '.');
+            if (backPath === path) {
+                // 兜底：若路径被污染成文件路径，回退到父目录
+                backPath = path.replace(/\/[^/]+$/, '') || '.';
+            }
+            listEl.innerHTML = '<div class="webshell-file-content"><pre>' + escapeHtml(out) + '</pre><button type="button" class="btn-ghost" id="webshell-file-back-btn" data-back-path="' + escapeHtml(backPath) + '">' + wsT('webshell.back') + '</button></div>';
+            var backBtn = document.getElementById('webshell-file-back-btn');
+            if (backBtn) {
+                backBtn.addEventListener('click', function () {
+                    var p = backBtn.getAttribute('data-back-path') || '.';
+                    webshellFileListDir(webshellCurrentConn, p);
+                });
+            }
         })
         .catch(function (err) {
             listEl.innerHTML = '<div class="webshell-file-error">' + escapeHtml(err && err.message ? err.message : '') + '</div>';

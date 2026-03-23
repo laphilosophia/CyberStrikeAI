@@ -19,7 +19,8 @@
     "copy": "复制",
     "copied": "已复制",
     "copyFailed": "复制失败",
-    "view": "查看"
+    "view": "查看",
+    "actions": "操作"
   },
   "header": {
     "title": "CyberStrikeAI",
@@ -409,7 +410,19 @@
     "selectAll": "全选",
     "searchPlaceholder": "搜索连接...",
     "noMatchConnections": "暂无匹配连接",
-    "breadcrumbHome": "根"
+    "breadcrumbHome": "根",
+    "back": "返回",
+    "moreActions": "更多操作",
+    "batchProbe": "一键批量探活",
+    "probeRunning": "探活中",
+    "probeOnline": "在线",
+    "probeOffline": "离线",
+    "probeNoConnections": "暂无可探活连接",
+    "colModifiedAt": "修改时间",
+    "colPerms": "权限",
+    "colOwner": "所有者",
+    "colGroup": "用户组",
+    "colType": "类型"
   },
   "mcp": {
     "monitorTitle": "MCP 状态监控",
