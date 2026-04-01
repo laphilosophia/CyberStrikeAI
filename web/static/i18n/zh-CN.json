@@ -169,6 +169,7 @@
     "taskCancelled": "任务已取消",
     "unknownTool": "未知工具",
     "einoAgentReplyTitle": "子代理回复",
+    "einoRecoveryTitle": "🔄 工具参数无效 · 第 {{n}}/{{max}} 轮（已追加提示）",
     "noDescription": "暂无描述",
     "noResponseData": "暂无响应数据",
     "loading": "加载中...",

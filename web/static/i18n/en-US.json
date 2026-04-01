@@ -169,6 +169,7 @@
     "taskCancelled": "Task cancelled",
     "unknownTool": "Unknown tool",
     "einoAgentReplyTitle": "Sub-agent reply",
+    "einoRecoveryTitle": "🔄 Invalid tool JSON · run {{n}}/{{max}} (hint appended)",
     "noDescription": "No description",
     "noResponseData": "No response data",
     "loading": "Loading...",
