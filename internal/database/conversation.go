@@ -457,6 +457,19 @@ func (db *DB) GetReActData(conversationID string) (reactInput, reactOutput strin
 	return reactInput, reactOutput, nil
 }
 
+// ConversationHasToolProcessDetails 对话是否存在已落库的工具调用/结果（用于多代理等场景下 MCP execution id 未汇总时的攻击链判定）。
+func (db *DB) ConversationHasToolProcessDetails(conversationID string) (bool, error) {
+	var n int
+	err := db.QueryRow(
+		`SELECT COUNT(*) FROM process_details WHERE conversation_id = ? AND event_type IN ('tool_call', 'tool_result')`,
+		conversationID,
+	).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("查询过程详情失败: %w", err)
+	}
+	return n > 0, nil
+}
+
 // AddMessage 添加消息
 func (db *DB) AddMessage(conversationID, role, content string, mcpExecutionIDs []string) (*Message, error) {
 	id := uuid.New().String()
